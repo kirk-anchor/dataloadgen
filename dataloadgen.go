@@ -1,9 +1,12 @@
 package dataloadgen
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 )
 
 // Option allows for configuration of loader fields.
@@ -22,6 +25,14 @@ func WithWait(d time.Duration) Option {
 	return func(l *loaderConfig) {
 		l.wait = d
 	}
+}
+
+// WithSemaphoreContext sets the context key for releasing a semaphore when blocked.
+func WithSemaphoreContext(ctxKey any) Option {
+	return func(l *loaderConfig) {
+		l.ctxKey = ctxKey
+	}
+
 }
 
 // NewLoader creates a new GenericLoader given a fetch, wait, and maxBatch
@@ -47,6 +58,9 @@ type loaderConfig struct {
 
 	// this will limit the maximum number of keys to send in one batch, 0 = no limit
 	maxBatch int
+
+	// context key for releasing a semaphore when blocked
+	ctxKey any
 }
 
 // Loader batches and caches requests
@@ -79,6 +93,17 @@ type loaderBatch[KeyT comparable, ValueT any] struct {
 
 // Load a ValueT by key, batching and caching will be applied automatically
 func (l *Loader[KeyT, ValueT]) Load(key KeyT) (ValueT, error) {
+	return l.LoadThunk(key)()
+}
+
+// LoadContext loads a ValueT by key, batching and caching will be applied automatically
+// Attempts to release a semaphore when blocked if one exists in the context
+func (l *Loader[KeyT, ValueT]) LoadContext(ctx context.Context, key KeyT) (ValueT, error) {
+	sem, ok := ctx.Value(ctxKey).(*semaphore.Weighted)
+	if ok {
+		sem.Release(1)
+		defer sem.Acquire(ctx, 1)
+	}
 	return l.LoadThunk(key)()
 }
 
